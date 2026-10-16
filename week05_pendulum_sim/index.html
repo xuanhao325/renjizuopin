@@ -109,6 +109,34 @@
     background: rgba(127,209,255,0.25);
     box-shadow: 0 0 12px rgba(127,209,255,0.5);
   }
+
+  /* ---------- 天体预设场景胶囊按钮（增量） ---------- */
+  #scenes {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-right: 6px;
+  }
+  #scenes .lbl { color: #9aa4c4; letter-spacing: 0.5px; }
+  .cap {
+    padding: 7px 16px;
+    border: 1px solid rgba(127,209,255,0.35);
+    background: rgba(127,209,255,0.08);
+    color: #c6d2f5;
+    border-radius: 999px;
+    cursor: pointer;
+    font-size: 13px;
+    letter-spacing: 0.5px;
+    transition: background 0.18s, box-shadow 0.18s, border-color 0.18s, color 0.18s;
+  }
+  .cap:hover { background: rgba(127,209,255,0.18); }
+  .cap.active {
+    background: rgba(127,209,255,0.32);
+    border-color: rgba(127,209,255,0.85);
+    color: #eaf6ff;
+    box-shadow: 0 0 12px rgba(127,209,255,0.55);
+  }
 </style>
 </head>
 <body>
@@ -121,13 +149,20 @@
 </div>
 
 <div id="panel">
+  <div id="scenes">
+    <span class="lbl">场景</span>
+    <button class="cap" data-g="9.8" data-scene="earth">地球</button>
+    <button class="cap" data-g="1.62" data-scene="moon">月球</button>
+    <button class="cap" data-g="24.79" data-scene="jupiter">木星</button>
+    <button class="cap" data-g="0" data-scene="space">太空</button>
+  </div>
   <div class="ctrl">
     <label>摆长 L <span id="lenOut">200</span> px</label>
     <input type="range" id="lenSlider" min="100" max="350" step="1" value="200" />
   </div>
   <div class="ctrl">
     <label>重力 g <span id="gOut">9.8</span></label>
-    <input type="range" id="gSlider" min="1" max="25" step="0.1" value="9.8" />
+    <input type="range" id="gSlider" min="0" max="25" step="0.1" value="9.8" />
   </div>
   <div class="ctrl">
     <label>阻尼 <span id="dampOut">0.000</span></label>
@@ -146,10 +181,12 @@
   const tEl = document.getElementById("t");
 
   // ---------- 物理参数（遵循工程约束） ----------
-  let G = 9.8;              // 重力加速度 m/s^2（可调 1~25）
+  let G = 9.8;              // 重力加速度 m/s^2（可调 0~25；太空 = 0）
+  let gTarget = G;          // 重力过渡目标值（场景平滑切换）
   let L_PX = 200;           // 摆长（像素，用于绘制，可调 100~350）
   const PX_PER_M = 100;     // 100 像素 = 1 米，使 200px 对应 2.0m，周期 ~2.8s 流畅可见
   let damping = 0;          // 粘性阻尼系数（可调 0.000~0.010）
+  let currentScene = null;  // 当前预设场景 id（null = 自定义）
   const THETA0 = 45 * Math.PI / 180; // 初始摆角 45°
 
   // 状态量
@@ -189,7 +226,7 @@
   canvas.addEventListener("pointerdown", (e) => setAngleFromPointer(e.clientX, e.clientY));
   canvas.addEventListener("pointermove", (e) => { if (e.buttons === 1) setAngleFromPointer(e.clientX, e.clientY); });
 
-  // ---------- 交互控制面板（增量：3 滑块 + 重置按钮） ----------
+  // ---------- 交互控制面板（3 滑块 + 重置按钮 + 天体预设胶囊） ----------
   const lenSlider  = document.getElementById("lenSlider");
   const gSlider    = document.getElementById("gSlider");
   const dampSlider = document.getElementById("dampSlider");
@@ -199,30 +236,96 @@
   const dampOut = document.getElementById("dampOut");
   const hudL = document.getElementById("hudL");
   const hudG = document.getElementById("hudG");
+  const sceneBtns = Array.from(document.querySelectorAll("#scenes .cap"));
+
+  // 重力显示与滑块联动
+  function syncGDisplay(v) {
+    const s = v.toFixed(1);
+    gOut.textContent = s;
+    if (hudG) hudG.textContent = s;
+    gSlider.value = v;
+  }
+  function setActiveCap(id) {
+    sceneBtns.forEach((b) => b.classList.toggle("active", b.dataset.scene === id));
+  }
+  // 切换到预设场景：仅设定目标重力，由主循环平滑过渡
+  function applyScene(id, g) {
+    gTarget = g;
+    currentScene = id;
+    setActiveCap(id);
+    persist();
+  }
 
   lenSlider.addEventListener("input", (e) => {
     L_PX = +e.target.value;            // 即时生效：绘制与物理同步更新
     lenOut.textContent = L_PX;
     if (hudL) hudL.textContent = L_PX;
+    persist();
   });
   gSlider.addEventListener("input", (e) => {
-    G = +e.target.value;               // 即时生效
-    const v = G.toFixed(1);
-    gOut.textContent = v;
-    if (hudG) hudG.textContent = v;
+    G = +e.target.value;               // 即时生效，无过渡
+    gTarget = G;
+    currentScene = null;               // 手动调节 = 脱离预设
+    syncGDisplay(G);
+    setActiveCap(null);
+    persist();
   });
   dampSlider.addEventListener("input", (e) => {
     damping = +e.target.value;         // 即时生效
     dampOut.textContent = damping.toFixed(3);
+    persist();
   });
+  sceneBtns.forEach((b) => {
+    b.addEventListener("click", () => applyScene(b.dataset.scene, +b.dataset.g));
+  });
+
   // 重置：精准回到 45° 初始状态。
   // 定义在 IIFE 作用域内，通过 addEventListener 绑定（作用域安全，不会触发内联 onclick 的 ReferenceError）。
   function resetAnimation() {
     theta = THETA0;
     omega = 0;
     simTime = 0;
+    persist();
   }
   resetBtn.addEventListener("click", resetAnimation);
+
+  // ---------- 状态持久化（localStorage 自动保存 / 恢复） ----------
+  const STORAGE_KEY = "week05_pendulum_state";
+  function persist() {
+    try {
+      const data = {
+        L: L_PX, G: G, damping: damping, scene: currentScene,
+        theta: theta, omega: omega, simTime: simTime
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch (e) { /* 隐私模式 / 配额限制时忽略 */ }
+  }
+  function restore() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      if (typeof d.L === "number")       L_PX = Math.min(350, Math.max(100, d.L));
+      if (typeof d.G === "number")       { G = Math.min(25, Math.max(0, d.G)); gTarget = G; }
+      if (typeof d.damping === "number") damping = Math.min(0.010, Math.max(0, d.damping));
+      if (typeof d.theta === "number")   theta = d.theta;
+      if (typeof d.omega === "number")   omega = d.omega;
+      if (typeof d.simTime === "number") simTime = d.simTime;
+      currentScene = (typeof d.scene === "string") ? d.scene : null;
+    } catch (e) { /* 解析失败则回退默认值 */ }
+  }
+  function syncUI() {
+    lenSlider.value = L_PX; lenOut.textContent = L_PX; if (hudL) hudL.textContent = L_PX;
+    syncGDisplay(G);
+    dampSlider.value = damping; dampOut.textContent = damping.toFixed(3);
+    setActiveCap(currentScene);
+  }
+  // 加载即恢复上次缓存参数（含摆动角度），并刷新控件显示
+  restore();
+  syncUI();
+  // 关闭 / 切后台前保存最新状态，保证刷新后完美恢复
+  window.addEventListener("beforeunload", persist);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) persist(); });
 
   // ---------- 物理积分（半隐式欧拉，固定步长 + 累加器，保证稳定） ----------
   const FIXED_DT = 1 / 240; // 固定物理步长
@@ -315,6 +418,13 @@
     let frameDt = (now - last) / 1000;
     last = now;
     if (frameDt > 0.1) frameDt = 0.1; // 防止切后台后跳变
+
+    // 平滑过渡重力（场景切换时自然联动滑块与 HUD）
+    if (Math.abs(gTarget - G) > 1e-4) {
+      G += (gTarget - G) * Math.min(1, frameDt * 5);
+      if (Math.abs(gTarget - G) <= 1e-4) G = gTarget;
+      syncGDisplay(G);
+    }
 
     acc += frameDt;
     while (acc >= FIXED_DT) {
