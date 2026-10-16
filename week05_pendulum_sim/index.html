@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Week05 · 单摆物理仿真器（简谐振动）</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #1a1a24;
+    overflow: hidden;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+  }
+  #stage {
+    display: block;
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 0;
+  }
+  #hud {
+    position: fixed;
+    top: 16px;
+    left: 18px;
+    color: #9aa4c4;
+    font-size: 13px;
+    line-height: 1.6;
+    letter-spacing: 0.3px;
+    pointer-events: none;
+    text-shadow: 0 0 6px rgba(0,0,0,0.6);
+    z-index: 2;
+  }
+  #hud b { color: #d7e0ff; font-weight: 600; }
+  #hud .title { color: #7fd1ff; font-size: 15px; font-weight: 700; }
+
+  /* ---------- 底部交互控制面板（增量） ---------- */
+  #panel {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    flex-wrap: wrap;
+    padding: 14px 24px;
+    background: linear-gradient(180deg, rgba(32,34,50,0.96), rgba(22,23,33,0.96));
+    border-top: 1px solid rgba(127,209,255,0.18);
+    box-shadow: 0 -8px 22px rgba(0,0,0,0.35);
+    color: #9aa4c4;
+    font-size: 13px;
+    z-index: 2;
+  }
+  #panel .ctrl {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    min-width: 168px;
+  }
+  #panel label {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    letter-spacing: 0.3px;
+  }
+  #panel label span { color: #7fd1ff; font-weight: 600; }
+  #panel input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 180px;
+    height: 4px;
+    background: rgba(127,209,255,0.25);
+    border-radius: 3px;
+    outline: none;
+  }
+  #panel input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: #7fd1ff;
+    border: none;
+    cursor: pointer;
+    box-shadow: 0 0 8px rgba(127,209,255,0.85);
+  }
+  #panel input[type="range"]::-moz-range-thumb {
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: #7fd1ff;
+    border: none;
+    cursor: pointer;
+    box-shadow: 0 0 8px rgba(127,209,255,0.85);
+  }
+  #resetBtn {
+    margin-left: auto;
+    padding: 9px 20px;
+    border: 1px solid rgba(127,209,255,0.5);
+    background: rgba(127,209,255,0.12);
+    color: #d7e0ff;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    letter-spacing: 0.5px;
+    transition: background 0.15s, box-shadow 0.15s;
+  }
+  #resetBtn:hover {
+    background: rgba(127,209,255,0.25);
+    box-shadow: 0 0 12px rgba(127,209,255,0.5);
+  }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div id="hud">
+  <div class="title">单摆仿真器 · 简谐振动</div>
+  <div>摆长 L = <b id="hudL">200</b> px &nbsp;|&nbsp; 重力 g = <b id="hudG">9.8</b> m/s²</div>
+  <div>初始摆角 θ₀ = <b>45°</b></div>
+  <div>当前 θ = <b id="ang">45.0°</b> &nbsp;|&nbsp; t = <b id="t">0.00</b> s</div>
+</div>
+
+<div id="panel">
+  <div class="ctrl">
+    <label>摆长 L <span id="lenOut">200</span> px</label>
+    <input type="range" id="lenSlider" min="100" max="350" step="1" value="200" />
+  </div>
+  <div class="ctrl">
+    <label>重力 g <span id="gOut">9.8</span></label>
+    <input type="range" id="gSlider" min="1" max="25" step="0.1" value="9.8" />
+  </div>
+  <div class="ctrl">
+    <label>阻尼 <span id="dampOut">0.000</span></label>
+    <input type="range" id="dampSlider" min="0" max="0.010" step="0.001" value="0" />
+  </div>
+  <button id="resetBtn">重置摆动</button>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const canvas = document.getElementById("stage");
+  const ctx = canvas.getContext("2d");
+  const angEl = document.getElementById("ang");
+  const tEl = document.getElementById("t");
+
+  // ---------- 物理参数（遵循工程约束） ----------
+  let G = 9.8;              // 重力加速度 m/s^2（可调 1~25）
+  let L_PX = 200;           // 摆长（像素，用于绘制，可调 100~350）
+  const PX_PER_M = 100;     // 100 像素 = 1 米，使 200px 对应 2.0m，周期 ~2.8s 流畅可见
+  let damping = 0;          // 粘性阻尼系数（可调 0.000~0.010）
+  const THETA0 = 45 * Math.PI / 180; // 初始摆角 45°
+
+  // 状态量
+  let theta = THETA0;       // 当前摆角（弧度）
+  let omega = 0;            // 角速度（rad/s）
+  let simTime = 0;          // 仿真累计时间
+
+  // 摆球视觉
+  const BALL_R = 16;        // 摆球半径
+  const PIVOT_GAP = 90;     // 支点距顶部偏移
+
+  // ---------- 高分屏适配 ----------
+  let cx = 0, cy = 0, dpr = 1;
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth || window.innerWidth;
+    const h = canvas.clientHeight || window.innerHeight;
+    canvas.width = Math.floor(w * dpr);
+    canvas.height = Math.floor(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cx = w / 2;
+    cy = Math.min(h * 0.32, PIVOT_GAP + 40);
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  // 点击/拖拽可重新设定初始角度（额外交互，不影响基线物理）
+  function setAngleFromPointer(clientX, clientY) {
+    const dx = clientX - cx;
+    const dy = clientY - cy;
+    let a = Math.atan2(dx, dy); // 与竖直向下方向夹角
+    a = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, a));
+    theta = a;
+    omega = 0;
+    simTime = 0;
+  }
+  canvas.addEventListener("pointerdown", (e) => setAngleFromPointer(e.clientX, e.clientY));
+  canvas.addEventListener("pointermove", (e) => { if (e.buttons === 1) setAngleFromPointer(e.clientX, e.clientY); });
+
+  // ---------- 交互控制面板（增量：3 滑块 + 重置按钮） ----------
+  const lenSlider  = document.getElementById("lenSlider");
+  const gSlider    = document.getElementById("gSlider");
+  const dampSlider = document.getElementById("dampSlider");
+  const resetBtn   = document.getElementById("resetBtn");
+  const lenOut  = document.getElementById("lenOut");
+  const gOut    = document.getElementById("gOut");
+  const dampOut = document.getElementById("dampOut");
+  const hudL = document.getElementById("hudL");
+  const hudG = document.getElementById("hudG");
+
+  lenSlider.addEventListener("input", (e) => {
+    L_PX = +e.target.value;            // 即时生效：绘制与物理同步更新
+    lenOut.textContent = L_PX;
+    if (hudL) hudL.textContent = L_PX;
+  });
+  gSlider.addEventListener("input", (e) => {
+    G = +e.target.value;               // 即时生效
+    const v = G.toFixed(1);
+    gOut.textContent = v;
+    if (hudG) hudG.textContent = v;
+  });
+  dampSlider.addEventListener("input", (e) => {
+    damping = +e.target.value;         // 即时生效
+    dampOut.textContent = damping.toFixed(3);
+  });
+  // 重置：精准回到 45° 初始状态。
+  // 定义在 IIFE 作用域内，通过 addEventListener 绑定（作用域安全，不会触发内联 onclick 的 ReferenceError）。
+  function resetAnimation() {
+    theta = THETA0;
+    omega = 0;
+    simTime = 0;
+  }
+  resetBtn.addEventListener("click", resetAnimation);
+
+  // ---------- 物理积分（半隐式欧拉，固定步长 + 累加器，保证稳定） ----------
+  const FIXED_DT = 1 / 240; // 固定物理步长
+  let acc = 0;
+
+  function step(dt) {
+    // 真实单摆运动方程：θ'' = -(g/L)·sinθ（小角度即简谐振动）
+    const L_M = L_PX / PX_PER_M;
+    const alpha = -(G / L_M) * Math.sin(theta);
+    omega += alpha * dt;
+    omega -= damping * omega * dt; // 粘性阻尼项：自然衰减
+    theta += omega * dt;
+    simTime += dt;
+  }
+
+  // ---------- 绘制 ----------
+  function draw() {
+    const w = canvas.width / dpr;
+    const h = canvas.height / dpr;
+
+    // 背景：深灰科技色
+    ctx.fillStyle = "#1a1a24";
+    ctx.fillRect(0, 0, w, h);
+
+    // 轻微径向光晕背景，增强科技感
+    const bgGlow = ctx.createRadialGradient(cx, cy, 10, cx, cy, Math.max(w, h) * 0.7);
+    bgGlow.addColorStop(0, "rgba(60,70,110,0.18)");
+    bgGlow.addColorStop(1, "rgba(26,26,36,0)");
+    ctx.fillStyle = bgGlow;
+    ctx.fillRect(0, 0, w, h);
+
+    // 摆球坐标
+    const bx = cx + L_PX * Math.sin(theta);
+    const by = cy + L_PX * Math.cos(theta);
+
+    // 支点
+    ctx.beginPath();
+    ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+    ctx.fillStyle = "#8b93b8";
+    ctx.fill();
+
+    // 摆杆
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(bx, by);
+    ctx.strokeStyle = "rgba(160,170,210,0.55)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // 平衡位置参考虚线
+    ctx.save();
+    ctx.setLineDash([4, 6]);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx, cy + L_PX);
+    ctx.strokeStyle = "rgba(120,130,170,0.18)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+
+    // 摆球发光光效
+    ctx.save();
+    ctx.shadowColor = "rgba(127,209,255,0.9)";
+    ctx.shadowBlur = 28;
+    const grad = ctx.createRadialGradient(bx - BALL_R * 0.3, by - BALL_R * 0.3, 2, bx, by, BALL_R);
+    grad.addColorStop(0, "#eaf6ff");
+    grad.addColorStop(0.5, "#7fd1ff");
+    grad.addColorStop(1, "#2b6fb0");
+    ctx.beginPath();
+    ctx.arc(bx, by, BALL_R, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.restore();
+
+    // 摆球高光点
+    ctx.beginPath();
+    ctx.arc(bx - BALL_R * 0.32, by - BALL_R * 0.32, BALL_R * 0.28, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.fill();
+
+    // HUD 更新
+    let deg = theta * 180 / Math.PI;
+    angEl.textContent = deg.toFixed(1) + "°";
+    tEl.textContent = simTime.toFixed(2);
+  }
+
+  // ---------- 主循环：requestAnimationFrame 驱动物理与动画 ----------
+  let last = performance.now();
+  function loop(now) {
+    let frameDt = (now - last) / 1000;
+    last = now;
+    if (frameDt > 0.1) frameDt = 0.1; // 防止切后台后跳变
+
+    acc += frameDt;
+    while (acc >= FIXED_DT) {
+      step(FIXED_DT);
+      acc -= FIXED_DT;
+    }
+
+    draw();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
