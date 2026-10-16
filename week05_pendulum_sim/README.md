@@ -20,6 +20,7 @@
 - [x] 本目录仅承载第 5 周单摆仿真相关实验产物，互不污染。
 - [x] Git 基线已通过独立提交锁定（commit message：`feat(week05): init pendulum experiment workspace`）。
 - [x] 工作区状态：**READY（就绪）** —— 可在此目录下开始第 5 周实验，无需改动其他周次模块。
+- [x] 重置按钮已修复：采用作用域安全的 `addEventListener` 绑定 IIFE 内具名函数 `resetAnimation()`，规避内联 `onclick` 引发的 `ReferenceError: resetAnimation is not defined`，点击后精准复位至 45° 初始状态。
 
 ## 目录约定
 
